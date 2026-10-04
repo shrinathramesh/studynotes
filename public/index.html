@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Study Notes Generator</title>
+<style>
+  :root {
+    --bg: #f5f6fa; --card: #ffffff; --text: #1d2433; --muted: #6b7385;
+    --border: #dde1ea; --accent: #3b5bdb; --accent-hover: #2f49b3; --danger: #c92a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --card: #1b2030; --text: #e8ebf3; --muted: #99a1b5;
+      --border: #2c3348; --accent: #5c7cfa; --accent-hover: #748ffc; --danger: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { text-align: center; margin: 0 0 4px; font-size: 1.7rem; }
+  .sub { text-align: center; color: var(--muted); margin: 0 0 22px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { margin: 0 0 10px; font-size: 1rem; color: var(--muted); font-weight: 600; }
+  textarea {
+    width: 100%; min-height: 200px; resize: vertical; padding: 12px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: transparent; color: var(--text); font: inherit; line-height: 1.5;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+  .count { color: var(--muted); font-size: 0.9rem; }
+  .buttons { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 12px; }
+  button {
+    padding: 10px 20px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); font: inherit; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .bar { height: 4px; border-radius: 4px; background: var(--border); overflow: hidden; visibility: hidden; }
+  .bar.on { visibility: visible; }
+  .bar span {
+    display: block; height: 100%; width: 35%; background: var(--accent);
+    animation: slide 1.1s ease-in-out infinite;
+  }
+  @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  .status { color: var(--muted); font-size: 0.9rem; margin: 6px 0 16px; min-height: 1.3em; }
+  .status.error { color: var(--danger); }
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .stat { flex: 1 1 140px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 1.3rem; }
+  .stat small { color: var(--muted); }
+  .summary { line-height: 1.6; margin: 0 0 14px; }
+  ol { margin: 0; padding-left: 22px; line-height: 1.6; }
+  li { margin-bottom: 6px; }
+  .note { color: var(--muted); font-size: 0.85rem; margin: 0 0 12px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Smart Study Notes Generator</h1>
+  <p class="sub">Paste a paragraph, then click Generate Notes.</p>
+
+  <section class="card">
+    <h2>Your text</h2>
+    <textarea id="input" placeholder="Paste at least 30 words of study material here..."></textarea>
+    <div class="row"><span class="count" id="wordCount">Words: 0</span></div>
+  </section>
+
+  <div class="buttons">
+    <button class="primary" id="generate">Generate Notes</button>
+    <button id="clear">Clear</button>
+    <button id="save" disabled>Save Notes</button>
+    <button id="copy" disabled>Copy</button>
+  </div>
+
+  <div class="bar" id="bar"><span></span></div>
+  <div class="status" id="status">Ready</div>
+
+  <section class="card hidden" id="results">
+    <h2>Results</h2>
+    <div class="stats">
+      <div class="stat"><b id="origCount">0</b><small>Original words</small></div>
+      <div class="stat"><b id="sumCount">0</b><small>Summary words</small></div>
+      <div class="stat"><b id="reduction">0%</b><small>Text reduction</small></div>
+    </div>
+    <p class="note hidden" id="truncNote"></p>
+    <h2>Summary</h2>
+    <p class="summary" id="summary"></p>
+    <h2>Key points</h2>
+    <ol id="keyPoints"></ol>
+  </section>
+</main>
+
+<script>
+  const MIN_WORDS = 30;
+  const $ = (id) => document.getElementById(id);
+  const input = $("input"), generateBtn = $("generate"), saveBtn = $("save"), copyBtn = $("copy");
+  let lastReport = "";
+
+  const countWords = (t) => (t.trim() ? t.trim().split(/\s+/).length : 0);
+
+  function setStatus(message, isError = false) {
+    $("status").textContent = message;
+    $("status").classList.toggle("error", isError);
+  }
+
+  function setBusy(busy) {
+    generateBtn.disabled = busy;
+    $("clear").disabled = busy;
+    $("bar").classList.toggle("on", busy);
+  }
+
+  function buildReport(d) {
+    const line = "=".repeat(32);
+    const points = d.key_points.map((p, i) => `${i + 1}. ${p}`).join("\n");
+    return [
+      line, "   SMART STUDY NOTES GENERATOR", line, "",
+      `Original Word Count: ${d.original_count}`, "",
+      "Summary:", d.summary, "",
+      `Summary Word Count: ${d.summary_count}`, "",
+      `Text Reduction: ${d.reduction.toFixed(2)}%`, "",
+      "Key Points:", points, "", line,
+    ].join("\n");
+  }
+
+  function render(d) {
+    $("origCount").textContent = d.original_count;
+    $("sumCount").textContent = d.summary_count;
+    $("reduction").textContent = d.reduction.toFixed(2) + "%";
+    $("summary").textContent = d.summary;
+
+    const list = $("keyPoints");
+    list.innerHTML = "";
+    d.key_points.forEach((p) => {
+      const li = document.createElement("li");
+      li.textContent = p;
+      list.appendChild(li);
+    });
+
+    const note = $("truncNote");
+    if (d.truncated) {
+      note.textContent = `Only the first ${d.used_words} words were summarized (model input limit); reduction is based on those words.`;
+      note.classList.remove("hidden");
+    } else {
+      note.classList.add("hidden");
+    }
+    $("results").classList.remove("hidden");
+  }
+
+  input.addEventListener("input", () => {
+    $("wordCount").textContent = "Words: " + countWords(input.value);
+  });
+
+  generateBtn.addEventListener("click", async () => {
+    const text = input.value.split(/\s+/).filter(Boolean).join(" ");
+    if (!text) return setStatus("Please enter or paste a paragraph first.", true);
+    const n = countWords(text);
+    if (n < MIN_WORDS) {
+      return setStatus(`Your text has only ${n} words. Please enter at least ${MIN_WORDS} words.`, true);
+    }
+
+    setBusy(true);
+    saveBtn.disabled = copyBtn.disabled = true;
+    setStatus("Generating summary... (the first request may take a little longer)");
+
+    try {
+      const res = await fetch("/api/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      let data;
+      try { data = await res.json(); } catch { throw new Error("Server returned an invalid response."); }
+      if (!res.ok) throw new Error(data.error || "Request failed.");
+
+      lastReport = buildReport(data);
+      render(data);
+      saveBtn.disabled = copyBtn.disabled = false;
+      setStatus("Done!");
+    } catch (err) {
+      setStatus(err.message || "Something went wrong.", true);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  $("clear").addEventListener("click", () => {
+    input.value = "";
+    $("wordCount").textContent = "Words: 0";
+    $("results").classList.add("hidden");
+    saveBtn.disabled = copyBtn.disabled = true;
+    lastReport = "";
+    setStatus("Ready");
+  });
+
+  saveBtn.addEventListener("click", () => {
+    if (!lastReport) return;
+    const url = URL.createObjectURL(new Blob([lastReport], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "study_notes.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  copyBtn.addEventListener("click", async () => {
+    if (!lastReport) return;
+    try {
+      await navigator.clipboard.writeText(lastReport);
+      setStatus("Copied to clipboard.");
+    } catch {
+      setStatus("Could not copy. Use Save Notes instead.", true);
+    }
+  });
+</script>
+</body>
+</html>
